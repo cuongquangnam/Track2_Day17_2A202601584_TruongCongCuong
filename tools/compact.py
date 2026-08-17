@@ -59,31 +59,43 @@ DST = DATA / "gold_events_v2"
 
 def main() -> int:
     con = duckdb.connect()
+    con.execute("set threads to 4")
 
     n_src = len(list(SRC.glob("*.parquet")))
     print(f"  nguồn : {SRC}  ({n_src:,} file)")
+    if n_src == 0:
+        print("  chưa có data/gold_events/ — chạy `make seed-extra` trước.")
+        return 1
 
-    # TODO(nhiệm vụ 4): hiện thực khung COPY ... TO ... ở phần docstring.
-    #
-    #   con.execute(f"""
-    #       copy (
-    #           select * from read_parquet('{SRC}/*.parquet')
-    #           order by ...
-    #       ) to '{DST}' (
-    #           format parquet,
-    #           partition_by (...),
-    #           overwrite_or_ignore,
-    #           row_group_size ...
-    #       )
-    #   """)
-    #
-    # Sau đó kiểm tra không mất hàng nào:
-    #
-    #   assert <số row dataset cũ> == <số row dataset mới>
+    # event_date: 14 giá trị, khớp filter ngày → hive prune bỏ 13/14 file.
+    # Không partition theo customer_name (650 giá trị): lại nở thành hàng
+    # nghìn file nhỏ. ORDER BY customer_name để min/max row-group lọc ACME.
+    # ~9.000 hàng/ngày << 122.880: một row-group che cả ngày thì min/max
+    # customer_name vô dụng. 2048 hàng/group giữ cluster theo khách.
+    con.execute(f"""
+        copy (
+            select *
+            from read_parquet('{SRC}/*.parquet')
+            order by customer_name, event_time
+        ) to '{DST}' (
+            format parquet,
+            partition_by (event_date),
+            overwrite_or_ignore,
+            row_group_size 2048
+        )
+    """)
 
-    print("\n  tools/compact.py chưa được hiện thực — đây là nhiệm vụ 4.")
-    print("  Mở file này, đọc phần KHUNG THỰC HIỆN ở đầu file và điền vào TODO.")
-    print("  Hướng dẫn từng bước: GUIDE.md mục 4.\n")
+    n_old = con.execute(
+        f"select count(*) from read_parquet('{SRC}/*.parquet')"
+    ).fetchone()[0]
+    n_new = con.execute(
+        f"select count(*) from read_parquet('{DST}/**/*.parquet', hive_partitioning=true)"
+    ).fetchone()[0]
+    n_dst = len(list(DST.glob("**/*.parquet")))
+    print(f"  đích  : {DST}  ({n_dst:,} file)")
+    print(f"  hàng  : {n_old:,} → {n_new:,}")
+    assert n_old == n_new, f"mất hàng khi compact: {n_old} → {n_new}"
+    print("  compact xong, số hàng giữ nguyên.\n")
     return 0
 
 

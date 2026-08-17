@@ -35,16 +35,31 @@
 
 {{ config(materialized = 'table') }}
 
-with ranked as (
+with parsed as (
 
     select
         *,
-        {{ normalize_priority('priority_raw') }}             as priority_clean,
+        {{ normalize_priority('priority_raw') }}             as priority_clean
+    from {{ source('bronze', 'bronze_tickets_cdc') }}
+
+),
+
+-- Lọc bản ghi hỏng TRƯỚC khi xếp hạng: ticket vẫn giữ trạng thái hợp lệ trước đó.
+valid as (
+
+    select * from parsed where priority_clean is not null
+
+),
+
+ranked as (
+
+    select
+        *,
         row_number() over (
             partition by ticket_id
             order by event_time desc, cdc_seq desc
         ) as _rn
-    from {{ source('bronze', 'bronze_tickets_cdc') }}
+    from valid
 
 ),
 
